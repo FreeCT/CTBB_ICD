@@ -1,4 +1,5 @@
 CC=g++
+CC_GPU=nvcc
 
 ODIR=obj
 
@@ -7,17 +8,19 @@ INCLUDES=-I$(IDIR_RECON)
 
 LOCAL_INCLUDES=recon_structs.h
 
-LIBS=-lm -lyaml-cpp -lctbb_read
+LIBS=-lm -lyaml-cpp -lctbb_read -lcudart
 
-CFLAGS=-g -DHAVE_CONFIG_H -std=gnu++11
+CFLAGS=-g -DHAVE_CONFIG_H -std=gnu++11 -I/usr/local/cuda/include
+NVCCFLAGS=-g -DHAVE_CONFIG_H -std=c++11
+CUDART = -L/usr/local/cuda-6.5/targets/x86_64-linux/lib/
 
-_OBJ=main.o parse_config.o setup.o generate_system_matrix.o initialize_recon_volume.o icd_iteration.o rotate_slices.o penalties.o
+_OBJ=main.o parse_config.o setup.o generate_system_matrix.o initialize_recon_volume.o icd_iteration.o rotate_slices.o penalties.o icd_iteration_gpu.o
 OBJ=$(patsubst %,$(ODIR)/%,$(_OBJ));
 
 all: ../icd
 
 ../icd: object_dir $(OBJ) 
-	(cd obj && $(CC) -g -fopenmp -o ../../icd *.o $(LIBS))
+	(cd obj && $(CC) -g -fopenmp $(CUDART) -o ../../icd *.o $(LIBS))
 
 object_dir:
 	mkdir -p obj
@@ -39,6 +42,9 @@ obj/initialize_recon_volume.o: initialize_recon_volume.cpp initialize_recon_volu
 
 obj/icd_iteration.o: icd_iteration.cpp icd_iteration.h recon_structs.h
 	$(CC) $(CFLAGS) -c -fopenmp -o $@ $<
+
+obj/icd_iteration_gpu.o: icd_iteration_gpu.cu icd_iteration.h recon_structs.h
+	$(CC_GPU) $(NVCCFLAGS) -c -o $@ $< 
 
 obj/rotate_slices.o: rotate_slices.cpp rotate_slices.h recon_structs.h interp.h
 	$(CC) $(CFLAGS) -c -o $@ $<

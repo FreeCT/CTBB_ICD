@@ -7,19 +7,42 @@
 #include <chrono>
 
 #include <omp.h>
-#include <boost/numeric/ublas/vector_sparse.hpp>
-#include <boost/numeric/ublas/vector.hpp>
+//#include <boost/numeric/ublas/vector_sparse.hpp>
+//#include <boost/numeric/ublas/vector.hpp>
 #include <boost/numeric/ublas/io.hpp>
-namespace ublas = boost::numeric::ublas;
+//namespace ublas = boost::numeric::ublas;
 
 #include "spinner.h"
 #include "recon_structs.h"
-#include "icd_iteration.h"
+#include "icd_iteration_gpu.h"
 #include "penalties.h"
 
 #define OMP_N_THREADS 8
 
-void icd_iteration(const struct recon_params * rp, struct ct_data * data){
+struct pair{
+    int index;
+    float value;
+};
+
+__global__ void initialize_sino_data(float * sinogram_estimate, float * reconstructed_image,struct pair * nonzeros,
+                                     size_t i,size_t j,size_t k, size_t offset,size_t grid_offset,
+                                     size_t num_voxels_x,size_t num_voxels_y,size_t num_voxels_z,size_t data_size){
+
+    int nonzero_idx = threadIdx.x + blockDim.x*blockIdx.x+grid_offset;
+    struct pair curr_nonzero=nonzeros[nonzero_idx];
+    int index = curr_nonzero.index + offset; // Raw data index
+    float curr_estimate=sinogram_estimate[index];
+    
+    size_t voxel_idx=i+j*num_voxels_x+k*num_voxels_x*num_voxels_y;
+    float curr_voxel_val=reconstructed_image[voxel_idx];
+
+    if ((index > -1) && (index < data_size)){
+        sinogram_estimate[index] = curr_estimate + curr_voxel_val*curr_nonzero.value;
+        //sinogram_estimate[index] = 123.0;
+    }
+}
+
+void icd_iteration_gpu(const struct recon_params * rp, struct ct_data * data){
 
     size_t data_size = rp->Readings*rp->n_channels*rp->Nrows_projection;
     
@@ -40,6 +63,16 @@ void icd_iteration(const struct recon_params * rp, struct ct_data * data){
     std::ifstream file(rp->matrix_path, std::ios_base::binary);
     
     // If WFBP was used to inialize the reconstructions, we need to initialize our sinogram estimate.
+    float * d_sinogram_estimate;
+    float * d_reconstructed_image;
+    struct pair * d_nonzeros;
+    cudaMalloc(&d_sinogram_estimate,rp->Readings*rp->n_channels*rp->Nrows_projection*sizeof(float));
+    cudaMalloc(&d_reconstructed_image,rp->num_voxels_x*rp->num_voxels_y*rp->num_voxels_z*sizeof(float));
+    //cudaMemcpyToSymbol(d_rp,rp,sizeof(struct recon_params),0,cudaMemcpyHostToDevice);
+
+    cudaMemcpy(d_sinogram_estimate,sinogram_estimate,rp->Readings*rp->n_channels*rp->Nrows_projection*sizeof(float),cudaMemcpyHostToDevice);
+    cudaMemcpy(d_reconstructed_image,reconstructed_image,rp->num_voxels_x*rp->num_voxels_y*rp->num_voxels_z*sizeof(float),cudaMemcpyHostToDevice);
+    
     if (rp->wfbp_initialize){
         std::cout << "Initializing sinogram estimate..." << std::endl;       
 
@@ -47,18 +80,20 @@ void icd_iteration(const struct recon_params * rp, struct ct_data * data){
         init_spinner();
         for (int j=0; j<rp->num_voxels_y; j++){
             update_spinner(j,rp->num_voxels_x);
-            for (int i=0; i<rp->num_voxels_x; i++){        
+            for (int i=0; i<rp->num_voxels_x; i++){
+
                 // Extract column of projection matrix
                 size_t nnz;
                 file.read((char*)&nnz, sizeof(nnz));                
                 int num_nonzeros = (int)nnz; // cast to int to avoid potential issues
-                struct pair{
-                    int index;
-                    float value;
-                };
+                
                 struct pair * nonzeros = new struct pair[num_nonzeros];
+                
                 if (num_nonzeros > 0)
                     file.read((char*)&nonzeros[0], num_nonzeros*sizeof(pair));
+
+                cudaMalloc(&d_nonzeros,nnz*sizeof(struct pair));
+                cudaMemcpy(d_nonzeros,nonzeros,num_nonzeros*sizeof(struct pair),cudaMemcpyHostToDevice);
 
                 // Loop over all slices for current x,y
                 for (int k=0; k<rp->num_voxels_z; k++){
@@ -67,25 +102,45 @@ void icd_iteration(const struct recon_params * rp, struct ct_data * data){
         
                     int offset = (central_idx - rp->num_views_for_system_matrix/2)*rp->n_channels*rp->Nrows_projection;
 
-#pragma omp parallel num_threads(OMP_N_THREADS)
-                    {
-#pragma omp for
-                    for (int m = 0; m<num_nonzeros; m++){
-                        int index = nonzeros[m].index + offset; // Raw data index
-                        if ((index > -1) && (index < data_size)){
-                            size_t voxel_idx=i+j*rp->num_voxels_x+k*rp->num_voxels_x*rp->num_voxels_y;
-                            sinogram_estimate[index] = sinogram_estimate[index] + reconstructed_image[voxel_idx]*nonzeros[m].value;
-                        }
+                    int n_threads=num_nonzeros;
+                    int n_blocks=1;
+
+                    while (n_threads>1024){
+                        n_blocks=n_blocks+1;
+                        n_threads=n_threads/n_blocks;
                     }
-                    }
+
+                    //std::cout << num_nonzeros << " : " << n_threads << " : " << n_blocks << std::endl;
+
+                    // Compute the bulk of current column (whatever amount "grids out" nicely)
+                    dim3 update_threads(n_threads);
+                    dim3 update_blocks(n_blocks);
+                    
+                    initialize_sino_data<<<update_blocks,update_threads>>>(d_sinogram_estimate,d_reconstructed_image,d_nonzeros,
+                                                                           i,j,k,offset,0,
+                                                                           rp->num_voxels_x,rp->num_voxels_y,rp->num_voxels_z,data_size);
+
+                    // Compute the stragglers (whatever didn't grid nicely)
+                    update_threads.x=num_nonzeros-(n_blocks*n_threads);
+                    update_blocks.x=1;
+                    initialize_sino_data<<<update_blocks,update_threads>>>(d_sinogram_estimate,d_reconstructed_image,d_nonzeros,
+                                                                           i,j,k,offset,n_threads*n_blocks,
+                                                                           rp->num_voxels_x,rp->num_voxels_y,rp->num_voxels_z,data_size);
+                    
                 }
+                cudaFree(d_nonzeros);
             }            
         }
         destroy_spinner();
         file.clear();
         file.seekg(0, std::ios_base::beg);
+
+        cudaMemcpy(sinogram_estimate,d_sinogram_estimate,rp->Readings*rp->n_channels*rp->Nrows_projection*sizeof(float),cudaMemcpyDeviceToHost);
+        cudaFree(d_sinogram_estimate);
+        cudaFree(d_reconstructed_image);
     }
 
+    exit(0);
 
     // Write pre-iteration reconstruction to disk 
     std::ostringstream recon_path;       
@@ -105,7 +160,7 @@ void icd_iteration(const struct recon_params * rp, struct ct_data * data){
 
     //tk end debugging
 
-    ublas::compressed_vector<float> col(rp->Readings*rp->n_channels*rp->Nrows_projection);
+    //ublas::compressed_vector<float> col(rp->Readings*rp->n_channels*rp->Nrows_projection);
 
     // Initialize iterative parameters
     // Current implementation limited to 2D (hard coded)
@@ -156,7 +211,7 @@ void icd_iteration(const struct recon_params * rp, struct ct_data * data){
                     for (int k = 0; k < (rp->num_voxels_z); k++){ 
 
                         /// Grab the Z slice locations (spatial+idx)
-                        double curr_slice_location=data->slice_locations[k];
+                        //double curr_slice_location=data->slice_locations[k];
                         size_t central_idx=data->slice_indices[k];
                         
                         int q = q0 + rp->num_voxels_x*rp->num_voxels_y*k;

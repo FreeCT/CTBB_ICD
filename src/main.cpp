@@ -8,6 +8,7 @@
 #include "generate_system_matrix.h"
 #include "rotate_slices.h"
 #include "icd_iteration.h"
+#include "icd_iteration_gpu.h"
 
 struct flags {
     bool testing;
@@ -95,7 +96,8 @@ int main(int argc, char ** argv){
     std::cout << "Debug file written to desktop." << std::endl;
 
     /*--- Perform ICD iterations (icd_iteration.cpp) ---*/
-    icd_iteration(&rp_const,&data);
+    //icd_iteration(&rp_const,&data);
+    icd_iteration_gpu(&rp_const,&data);
 
     /*--- De-rotate our ICD slices (rotate_slices.cpp) ---*/
     rotate_slices_rotating2fixed(&rp_const,&data);

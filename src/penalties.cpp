@@ -13,7 +13,7 @@ inline int sign(double x){
         return 1;
 }
 
-double func(double du, double alpha, double beta, double delta, double lambda, double * recon_volume,
+double func(double du, double alpha, double beta, double delta, double lambda, float * recon_volume,
             double *wgts, std::size_t*neighbor_indices, int q, const int num_neighbors,size_t array_size);
 
 void initialize_2d_weights(struct iterative_params *ip){
@@ -38,7 +38,7 @@ void initialize_2d_weights(struct iterative_params *ip){
     
 }
 
-double quadratic(int curr_idx,struct iterative_params * ip, double *recon_volume){
+double quadratic(int curr_idx,struct iterative_params * ip, float *recon_volume){
     // Compute pixel update using 2D (In-plane) QUADRATIC PENALTY function
     
     // Identify indices of voxels we'll compute 
@@ -65,7 +65,7 @@ double quadratic(int curr_idx,struct iterative_params * ip, double *recon_volume
 }
 
 
-double edge_preserving(int curr_idx,struct iterative_params * ip, double * recon_volume){
+double edge_preserving(int curr_idx,struct iterative_params * ip, float * recon_volume){
    // Identify indices of voxels we'll compute 
     std::size_t neighbor_indices[8];
     
@@ -118,7 +118,7 @@ double edge_preserving(int curr_idx,struct iterative_params * ip, double * recon
     }    
 }
 
-double func(double du, double alpha, double beta, double delta, double lambda, double * recon_volume,
+double func(double du, double alpha, double beta, double delta, double lambda, float * recon_volume,
             double *wgts, std::size_t *neighbor_indices, int q, int num_neighbors,size_t array_size){
 	double sum = 0;
 	for (int i = 0; i < num_neighbors; i++){
