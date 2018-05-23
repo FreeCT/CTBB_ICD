@@ -33,7 +33,7 @@ Work has been done to objectively evaluate the quality of our reconstructions.  
 
 ### FreeCT_ICD is not a library
 
-There are many great reconstruction libraries out there (http://conrad.stanford.edu/, http://www.openrtk.org/ to name two), and perhaps one day FreeCT_ICD will be recast as a library.  Currently however, it is not a library, it a program.
+There are many great reconstruction libraries out there (http://conrad.stanford.edu/, http://www.openrtk.org/ to name two), and perhaps one day FreeCT_ICD will be recast as a library.  Currently however, it is not a library, it is a program.
 
 It is structured modularly, so that major subsections of the reconstruction process are easy to identify/customize/edit/etc. so there are library-like qualities to the project to make it easy to use.
 
