@@ -1,0 +1,6 @@
+[submodule "lib/FreeCT_Reader"]
+	path = lib/FreeCT_Reader
+	url = https://github.com/FreeCT/FreeCT_Reader
+[submodule "lib/yaml-cpp"]
+	path = lib/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp
